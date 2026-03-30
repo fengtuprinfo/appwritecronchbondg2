@@ -1,4 +1,4 @@
-# cronappwriteabuhg17
+﻿# cronappwriteabuhg17
 
 This repository exports Appwrite database data every hour with GitHub Actions and stores the result in versioned JSON files.
 
@@ -25,13 +25,43 @@ Use these values from your Appwrite project:
 
 ## Workflow behavior
 
-- Runs automatically every hour via GitHub Actions cron
+- Runs automatically every hour at minute `11` via GitHub Actions cron
 - Can also be started manually from the Actions tab with `workflow_dispatch`
+- Also supports external trigger via `repository_dispatch`
 - Commits backup changes back into the repository
+- Uses workflow concurrency to avoid overlapping runs on the same branch
 
 ## Important note about schedule time
 
-GitHub Actions cron uses UTC. The current schedule `0 * * * *` means it runs at the start of every UTC hour.
+GitHub Actions cron uses UTC. The current schedule `11 * * * *` means it runs at minute `11` of every UTC hour.
+
+## More reliable external trigger
+
+Keep the GitHub schedule enabled, then add a second trigger from any external cron service that can send an HTTP `POST` request.
+
+Recommended setup:
+
+- Keep this workflow file active in GitHub
+- In the external cron service, run the request every hour at minute `11`
+- Use GitHub's `repository_dispatch` API endpoint
+- Send the event type `external-hourly-sync`
+
+Example request:
+
+```bash
+curl -X POST \
+  -H "Accept: application/vnd.github+json" \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  https://api.github.com/repos/abuhg17/cronappwriteabuhg17/dispatches \
+  -d '{"event_type":"external-hourly-sync"}'
+```
+
+Token notes:
+
+- Use a GitHub token that can trigger repository events for this repo
+- Store that token in the external cron service, not in this repository
+- If both GitHub schedule and external trigger fire close together, concurrency prevents overlapping runs
 
 ## Local run
 

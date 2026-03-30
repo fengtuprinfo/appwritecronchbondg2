@@ -4,6 +4,13 @@ on:
   schedule:
     - cron: "11 * * * *"
   workflow_dispatch:
+  repository_dispatch:
+    types:
+      - external-hourly-sync
+
+concurrency:
+  group: appwrite-sync-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -44,6 +51,3 @@ jobs:
           git add data/appwrite
           git commit -m "chore: update appwrite backup"
           git push
-
-
-
