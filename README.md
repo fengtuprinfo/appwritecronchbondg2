@@ -1,4 +1,4 @@
-﻿# cronappwriteabuhg17
+# cronappwriteabuhg17
 
 This repository exports Appwrite database data every hour with GitHub Actions and stores the result in versioned JSON files.
 
@@ -30,6 +30,7 @@ Use these values from your Appwrite project:
 - Also supports external trigger via `repository_dispatch`
 - Commits backup changes back into the repository
 - Uses workflow concurrency to avoid overlapping runs on the same branch
+- If Appwrite reports `project_paused`, the workflow logs a warning and skips that run
 
 ## Important note about schedule time
 
@@ -74,4 +75,3 @@ $env:APPWRITE_DATABASE_ID="your-database-id"
 $env:APPWRITE_API_KEY="your-api-key"
 python scripts/fetch_appwrite_backup.py
 ```
-

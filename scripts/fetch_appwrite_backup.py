@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -7,6 +7,10 @@ from typing import Any, Dict, List
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+
+class AppwritePausedError(RuntimeError):
+    """Raised when Appwrite pauses the project due to inactivity."""
 
 
 def require_env(name: str) -> str:
@@ -42,6 +46,14 @@ def appwrite_get(
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = None
+
+        if exc.code == 403 and isinstance(payload, dict) and payload.get("type") == "project_paused":
+            raise AppwritePausedError(payload.get("message", "Project is paused.")) from exc
+
         raise RuntimeError(f"Appwrite API error {exc.code} on {path}: {body}") from exc
     except URLError as exc:
         raise RuntimeError(f"Failed to reach Appwrite endpoint: {exc}") from exc
@@ -170,6 +182,12 @@ def main() -> int:
         write_json(history_path, snapshot)
 
         print(f"Exported {snapshot['collectionCount']} collections to {latest_path} and {history_path}")
+        return 0
+    except AppwritePausedError as exc:
+        print(
+            "::warning::Appwrite project is paused, so this backup run was skipped. "
+            f"Restore the project in Appwrite Console to resume exports. Details: {exc}"
+        )
         return 0
     except Exception as exc:
         print(str(exc), file=sys.stderr)
