@@ -13,14 +13,23 @@ class AppwritePausedError(RuntimeError):
     """Raised when Appwrite pauses the project due to inactivity."""
 
 
+DEBUG_ENABLED = os.getenv("APPWRITE_EXPORT_DEBUG", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
 def log_progress(message: str) -> None:
     print(f"[progress] {message}", flush=True)
+
+
+def log_debug(message: str) -> None:
+    if DEBUG_ENABLED:
+        print(f"[debug] {message}", flush=True)
 
 
 def require_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
+    log_debug(f"Loaded required environment variable {name}")
     return value
 
 
@@ -35,8 +44,11 @@ def appwrite_get(
     if params:
         query = "?" + urlencode(params, doseq=True)
 
+    url = f"{endpoint.rstrip('/')}{path}{query}"
+    log_debug(f"GET {url}")
+
     request = Request(
-        f"{endpoint.rstrip('/')}{path}{query}",
+        url,
         headers={
             "X-Appwrite-Project": project_id,
             "X-Appwrite-Key": api_key,
@@ -47,9 +59,13 @@ def appwrite_get(
 
     try:
         with urlopen(request, timeout=60) as response:
-            return json.loads(response.read().decode("utf-8"))
+            payload = json.loads(response.read().decode("utf-8"))
+            size_hint = len(payload) if isinstance(payload, dict) else "n/a"
+            log_debug(f"Response {response.status} from {path}; top-level keys/count hint: {size_hint}")
+            return payload
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        log_debug(f"HTTPError {exc.code} on {path}: {body}")
         try:
             payload = json.loads(body)
         except json.JSONDecodeError:
@@ -60,6 +76,7 @@ def appwrite_get(
 
         raise RuntimeError(f"Appwrite API error {exc.code} on {path}: {body}") from exc
     except URLError as exc:
+        log_debug(f"URLError on {path}: {exc}")
         raise RuntimeError(f"Failed to reach Appwrite endpoint: {exc}") from exc
 
 
@@ -70,7 +87,9 @@ def build_query(method: str, values: List[Any], column: str | None = None) -> st
     }
     if column is not None:
         payload["column"] = column
-    return json.dumps(payload, separators=(",", ":"))
+    query = json.dumps(payload, separators=(",", ":"))
+    log_debug(f"Built query: {query}")
+    return query
 
 
 def list_collections(endpoint: str, project_id: str, api_key: str, database_id: str) -> List[Dict[str, Any]]:
@@ -95,6 +114,7 @@ def list_collections(endpoint: str, project_id: str, api_key: str, database_id: 
         batch = payload.get("collections", [])
         collections.extend(batch)
         log_progress(f"Loaded collection page at offset {offset}; total collections discovered: {len(collections)}")
+        log_debug(f"Collection page offset {offset} returned {len(batch)} collections")
 
         if len(batch) < page_size:
             break
@@ -139,6 +159,9 @@ def list_documents(
             f"[{current_index}/{total_collections}] {collection_name} ({collection_id}) page {page_number}: "
             f"fetched {len(batch)} docs, accumulated {len(documents)}"
         )
+        log_debug(
+            f"Collection {collection_name} ({collection_id}) page {page_number} used offset {offset} and page size {page_size}"
+        )
 
         if len(batch) < page_size:
             break
@@ -150,6 +173,7 @@ def list_documents(
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    log_debug(f"Wrote JSON file to {path.resolve()}")
 
 
 def build_snapshot() -> Dict[str, Any]:
@@ -159,6 +183,10 @@ def build_snapshot() -> Dict[str, Any]:
     api_key = require_env("APPWRITE_API_KEY")
 
     log_progress(f"Starting Appwrite export for database {database_id}")
+    log_debug(f"Debug logging is {'enabled' if DEBUG_ENABLED else 'disabled'}")
+    log_debug(f"Export endpoint: {endpoint.rstrip('/')}")
+    log_debug(f"Export project ID: {project_id}")
+
     collections = list_collections(endpoint, project_id, api_key, database_id)
     exported_collections = []
     total_collections = len(collections)
@@ -168,6 +196,9 @@ def build_snapshot() -> Dict[str, Any]:
         collection_id = collection["$id"]
         collection_name = collection.get("name") or collection_id
         log_progress(f"[{index}/{total_collections}] Exporting collection {collection_name} ({collection_id})")
+        log_debug(
+            f"Collection metadata for {collection_name} ({collection_id}): permissions={len(collection.get('$permissions', []))}"
+        )
         documents = list_documents(
             endpoint,
             project_id,
@@ -188,8 +219,10 @@ def build_snapshot() -> Dict[str, Any]:
         log_progress(
             f"[{index}/{total_collections}] Completed {collection_name} ({collection_id}) with {len(documents)} documents"
         )
+        log_debug(f"Snapshot now contains {len(exported_collections)} exported collections")
 
     exported_at = datetime.now(timezone.utc)
+    log_debug(f"Snapshot timestamp: {exported_at.isoformat()}")
     return {
         "exportedAt": exported_at.isoformat(),
         "projectId": project_id,
@@ -209,6 +242,8 @@ def main() -> int:
         latest_path = base_dir / "latest.json"
         history_path = base_dir / "history" / f"snapshot-{stamp}.json"
 
+        log_debug(f"Preparing to write latest snapshot to {latest_path}")
+        log_debug(f"Preparing to write history snapshot to {history_path}")
         write_json(latest_path, snapshot)
         write_json(history_path, snapshot)
 
