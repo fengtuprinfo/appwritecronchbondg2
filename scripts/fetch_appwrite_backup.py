@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,12 @@ class AppwritePausedError(RuntimeError):
 
 
 DEBUG_ENABLED = os.getenv("APPWRITE_EXPORT_DEBUG", "1").strip().lower() not in {"0", "false", "no", "off"}
+REDACTED_SECRET = "[REDACTED_SECRET]"
+SENSITIVE_KEY_PARTS = ("key", "token", "secret", "password", "authorization", "auth")
+SECRET_VALUE_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._-]{16,}\b"),
+)
 
 
 def log_progress(message: str) -> None:
@@ -176,6 +183,29 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
     log_debug(f"Wrote JSON file to {path.resolve()}")
 
 
+def redact_string(value: str, key_hint: str | None = None) -> str:
+    redacted = value
+    if key_hint:
+        normalized_key = key_hint.lower()
+        if any(part in normalized_key for part in SENSITIVE_KEY_PARTS):
+            return REDACTED_SECRET
+
+    for pattern in SECRET_VALUE_PATTERNS:
+        redacted = pattern.sub(REDACTED_SECRET, redacted)
+
+    return redacted
+
+
+def sanitize_payload(value: Any, key_hint: str | None = None) -> Any:
+    if isinstance(value, dict):
+        return {key: sanitize_payload(item, key) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_payload(item, key_hint) for item in value]
+    if isinstance(value, str):
+        return redact_string(value, key_hint)
+    return value
+
+
 def build_snapshot() -> Dict[str, Any]:
     endpoint = require_env("APPWRITE_ENDPOINT")
     project_id = require_env("APPWRITE_PROJECT_ID")
@@ -223,13 +253,17 @@ def build_snapshot() -> Dict[str, Any]:
 
     exported_at = datetime.now(timezone.utc)
     log_debug(f"Snapshot timestamp: {exported_at.isoformat()}")
-    return {
+    snapshot = {
         "exportedAt": exported_at.isoformat(),
         "projectId": project_id,
         "databaseId": database_id,
         "collectionCount": len(exported_collections),
         "collections": exported_collections,
     }
+    sanitized_snapshot = sanitize_payload(snapshot)
+    if sanitized_snapshot != snapshot:
+        log_progress("Redacted sensitive values from exported snapshot")
+    return sanitized_snapshot
 
 
 def main() -> int:
